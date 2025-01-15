@@ -64,6 +64,14 @@ def plot_one_box(x, im, im_cuboid=None, im_mask=None, color=None, label=None, li
 
 def plot_object_pose(im, im_cuboid, im_mask, pose, cad_models, camera_matrix, color, label, block_x, block_y, orig_shape=None):
 
+    orig_shape = (480, 640)  # Height: 480 pixels, Width: 640 pixels
+
+    # print("Inside plot_object_pose:")
+    # print(f"pose: {pose}")
+    # print(f"cad_models: {cad_models}")
+    # print(f"camera_matrix: {camera_matrix}")
+    # print(f"orig_shape: {orig_shape}")
+
     img_2dod = copy.deepcopy(im)
     rotation = pose['rotation_vec']
     translation = pose['translation_vec']

@@ -24,6 +24,9 @@ from yolox.utils.plots import plot_one_box, colors
 IMAGE_EXT = [".jpg", ".jpeg", ".webp", ".bmp", ".png"]
 _NUM_CLASSES = {"coco":80, "lm":15, "lmo": 8, "ycbv": 21, "coco_kpts":1}
 
+# Global variables for iteration count and total inference time
+iter_cnt = 0
+total_infer_time = 0.0
 
 def make_parser():
     parser = argparse.ArgumentParser("YOLOX Demo!")
@@ -132,6 +135,7 @@ class Predictor(object):
         self.task = task
         self.data_set = data_set
         self.cad_models = model.head.cad_models
+        self.cad_models.camera_matrix = np.array([527.1667, 0.0, 313.2282, 0.0, 526.4720, 236.1043, 0.0, 0.0, 1.0000], dtype=np.float32)            # for NRF dataset
         if trt_file is not None:
             from torch2trt import TRTModule
 
@@ -143,6 +147,8 @@ class Predictor(object):
             self.model = model_trt
 
     def inference(self, img):
+        global iter_cnt, total_infer_time
+
         img_info = {"id": 0}
         if isinstance(img, str):
             img_info["file_name"] = os.path.basename(img)
@@ -182,7 +188,18 @@ class Predictor(object):
                     outputs, self.num_classes, self.confthre,
                     self.nmsthre, class_agnostic=True
                 )
-            logger.info("Infer time: {:.4f}s".format(time.time() - t0))
+
+            infer_time = time.time() - t0
+            # Update the global variables
+            iter_cnt += 1
+            total_infer_time += infer_time
+            mean_infer_time = total_infer_time / iter_cnt
+            
+            logger.info("Infer time: {:.4f}s | Mean infer time: {:.4f}s".format(infer_time, mean_infer_time))
+
+            
+
+
         return outputs, img_info
 
     def visual(self, output, img_info, cls_conf=0.35):
@@ -209,6 +226,11 @@ class Predictor(object):
         im_cuboid = copy.deepcopy(img)
         im_mask = copy.deepcopy(img)
         camera_matrix = self.cad_models.camera_matrix
+
+        # camera_matrix = np.array([527.1667, 0.0, 313.2282, 0.0, 526.4720, 236.1043, 0.0, 0.0, 1.0000], dtype=np.float32)
+
+        rotations_and_translations = []  # To store rotation and translation data
+
         if output is None:
             return img
         output = output.cpu()
@@ -217,14 +239,40 @@ class Predictor(object):
         for ind in range(output.shape[0]):
             pose = {}
             pose['xy'] = output[ind, 11:13]
-            rotation_vec, translation_vec = decode_rotation_translation(output[ind], camera_matrix=camera_matrix)
+            rotation_mat, rotation_vec, translation_vec = decode_rotation_translation(output[ind], camera_matrix=camera_matrix)
             pose["rotation_vec"] = rotation_vec
             pose["translation_vec"] = translation_vec
+
+            # Print the rotation and translation vectors immediately        2025.01.11
+            # print(f"Rotation Vector for index {ind}: {rotation_vec}")
+            # print(f"Translation Vector for index {ind}: {translation_vec}")
+
+
             cls = output[ind][-1]
             color = colors(cls)
+
+            # Print the class index (cls) and the corresponding class name
+            class_name = self.cad_models.class_to_name.get(int(cls), "Unknown Class")
+            # model_points = self.cad_models.class_to_model.get(int(cls), None)
+            # print(f"Class Index for index {ind}: {cls}")
+            print(f"Class Name: {class_name}")
+
+            # logger.info(f"CAD Models: {self.cad_models}")
+            # print(f"Available keys in class_to_model: {self.cad_models.class_to_model.keys()}")
+
+            # print(f"Camera Matrix: {camera_matrix}")
+
             plot_one_box(output[ind], img_2d, im_cuboid=im_cuboid, im_mask=im_mask, color=color, object_pose=True, label=str(int(cls.numpy())),
                   cad_models=self.cad_models, camera_matrix=camera_matrix, pose=pose, block_x=0, block_y=0, cls_names=self.cls_names)
-        return [img, img_2d, im_cuboid, im_mask]
+
+
+
+            # Append the rotation matrix and vector for this object to the list
+            rotations_and_translations.append({
+                "rotation_mat": rotation_mat,
+                "translation_vec": translation_vec
+            })
+        return [img, img_2d, im_cuboid, im_mask], rotations_and_translations
 
 
 
@@ -236,34 +284,56 @@ def image_demo(predictor, vis_folder, path, current_time, save_result):
     files.sort()
     for image_name in files:
         outputs, img_info = predictor.inference(image_name)
-        if predictor.task == "object_pose":
-            result_image = predictor.visual_object_pose(outputs[0], img_info, predictor.confthre)
-        else:
-            result_image = predictor.visual(outputs[0], img_info, predictor.confthre)
-        if save_result:
-            save_folder = os.path.join(
-                vis_folder, time.strftime("%Y_%m_%d_%H_%M_%S", current_time)
-            )
-            os.makedirs(save_folder, exist_ok=True)
-            if isinstance(result_image, list):
-                images_type = ["raw_img", "box", "cuboid", "mask"]
-                for image, image_type  in zip(result_image, images_type):
-                    os.makedirs(os.path.join(save_folder, image_type), exist_ok=True)
-                    save_file_name = os.path.join(save_folder, image_type, os.path.basename(image_name))
-                    logger.info("Saving detection result in {}".format(save_file_name))
-                    cv2.imwrite(save_file_name, image)
+
+        if outputs[0] is not None and len(outputs[0]) > 0:  # Check if there are detected objects       2025.01.11
+
+            if predictor.task == "object_pose":
+                result_image, R_and_T = predictor.visual_object_pose(outputs[0], img_info, predictor.confthre)
             else:
-                save_file_name = os.path.join(save_folder, os.path.basename(image_name))
-                logger.info("Saving detection result in {}".format(save_file_name))
-                cv2.imwrite(save_file_name, result_image)
-            save_txt = True
-            if save_txt:
-                os.makedirs(os.path.join(save_folder, 'txt'), exist_ok=True)
-                save_file_name = os.path.join(save_folder, 'txt', os.path.basename(image_name).split('.')[0]+'.txt')
-                with open(save_file_name, 'a') as f:
-                    for output in outputs[0]:
-                        line = output.tolist()
-                        f.write(('%8.5g  ' * len(line)).rstrip() % tuple(line) + '\n')
+                result_image = predictor.visual(outputs[0], img_info, predictor.confthre)
+            if save_result:
+                save_folder = os.path.join(
+                    vis_folder, time.strftime("%Y_%m_%d_%H_%M_%S", current_time)
+                )
+                os.makedirs(save_folder, exist_ok=True)
+                if isinstance(result_image, list):
+                    images_type = ["raw_img", "box", "cuboid", "mask"]
+                    for image, image_type  in zip(result_image, images_type):
+                        os.makedirs(os.path.join(save_folder, image_type), exist_ok=True)
+                        save_file_name = os.path.join(save_folder, image_type, os.path.basename(image_name))
+                        logger.info("Saving detection result in {}".format(save_file_name))
+                        cv2.imwrite(save_file_name, image)
+                else:
+                    save_file_name = os.path.join(save_folder, os.path.basename(image_name))
+                    logger.info("Saving detection result in {}".format(save_file_name))
+                    cv2.imwrite(save_file_name, result_image)
+                save_txt = True
+                if save_txt:
+                    os.makedirs(os.path.join(save_folder, 'txt'), exist_ok=True)
+                    save_file_name = os.path.join(save_folder, 'txt', os.path.basename(image_name).split('.')[0]+'.txt')
+                    with open(save_file_name, 'a') as f:
+                        # for output in outputs[0]:
+                        #     line = output.tolist()
+                        #     f.write(('%8.5g  ' * len(line)).rstrip() % tuple(line) + '\n')
+
+                        for idx, output in enumerate(outputs[0]):
+                            # Writing detection output (e.g., bounding box, class, etc.)
+                            line = output.tolist()
+                            f.write(('%8.5g  ' * len(line)).rstrip() % tuple(line))
+
+                            # Retrieve the rotation and translation data for the current object
+                            rotation_mat = R_and_T[idx]['rotation_mat'].flatten()  # Flatten to a 1D array (9 elements)
+                            translation_vec = R_and_T[idx]['translation_vec'].tolist()  # 3 elements
+
+                            # Concatenate the flattened rotation matrix with the translation vector
+                            pose_data = np.concatenate((rotation_mat, translation_vec))
+                            f.write('  ' + ('%8.5g  ' * len(pose_data)).rstrip() % tuple(pose_data) + '\n')
+        else:
+            logger.info(f"No detections for {image_name}, skipping saving results.")
+
+
+        print("---------------------------        Iteration done        ---------------------------\n")
+        print("------------------------------------------------------------------------------------")
 
         ch = cv2.waitKey(0)
         if ch == 27 or ch == ord("q") or ch == ord("Q"):

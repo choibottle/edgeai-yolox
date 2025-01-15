@@ -53,6 +53,7 @@ def decode_rotation_translation(pose, camera_matrix=None):
     # Tx and Ty are recovered using the formula given on page 5 of the the paper: https://arxiv.org/pdf/2011.04307.pdf
     # px, py, fx and fy are currently hard-coded for LINEMOD dataset
     tz = pose[13] * 100.0
+    tz = tz/2
     # print("prediction",obj_class, tz)
     tx = ((pose[11] / r_w) - camera_matrix[2]) * tz / camera_matrix[0]
     ty = ((pose[12] / r_h) - camera_matrix[5]) * tz / camera_matrix[4]
@@ -61,7 +62,11 @@ def decode_rotation_translation(pose, camera_matrix=None):
     translation_vec[0] = tx
     translation_vec[1] = ty
     translation_vec[2] = tz
-    return rotation_vec, translation_vec
+
+    print(f"R: {rotation_mat}")
+    print(f"t: {translation_vec} [mm]")
+
+    return rotation_mat, rotation_vec, translation_vec
 
 def load_models(models_datapath, class_to_name=None):
     class_to_model = {class_id: None for class_id in class_to_name.keys()}
