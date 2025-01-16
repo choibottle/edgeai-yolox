@@ -63,8 +63,19 @@ def decode_rotation_translation(pose, camera_matrix=None):
     translation_vec[1] = ty
     translation_vec[2] = tz
 
-    print(f"R: {rotation_mat}")
-    print(f"t: {translation_vec} [mm]")
+    # Convert translation vector elements from mm to meters
+    translation_vec_meters = translation_vec / 1000.0
+
+    # Construct the 4x4 transformation matrix
+    pose_matrix = np.eye(4)  # Start with a 4x4 identity matrix
+    pose_matrix[:3, :3] = rotation_mat  # Set the rotation part
+    pose_matrix[:3, 3] = translation_vec_meters  # Set the translation part
+
+    # print(f"R: {rotation_mat}")
+    # print(f"t: {translation_vec_meters} [m]")
+
+    print("Pose:")
+    print(pose_matrix)
 
     return rotation_mat, rotation_vec, translation_vec
 
